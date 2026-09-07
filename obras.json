@@ -1,0 +1,9 @@
+{
+  "actualizado": "2026-09-07",
+  "obras": [
+    {"codigo": "25001 - Alejandro San Antonio", "municipio": "Requena"},
+    {"codigo": "25006 - Nicolai Eliana",        "municipio": "La Eliana"},
+    {"codigo": "25009 - Carlos Pérez",          "municipio": "Requena"},
+    {"codigo": "25010 - Cometa III",            "municipio": "Calpe"}
+  ]
+}

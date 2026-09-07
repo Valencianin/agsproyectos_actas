@@ -29,6 +29,7 @@ body{
 .barra .envoltorio{display:flex;align-items:baseline;gap:14px;padding:14px 20px}
 .barra h1{font-size:17px;font-weight:700;margin:0;letter-spacing:-.01em}
 .barra .estado{margin-left:auto;font-size:13px;color:var(--gris-3)}
+.barra button{margin-left:12px}
 
 section{border-bottom:1px solid var(--gris-2);padding:32px 0 36px}
 h2{font-size:21px;font-weight:700;margin:0 0 4px;letter-spacing:-.015em}
@@ -94,9 +95,12 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
   #hoja .membrete .logo{width:32%;text-align:center}
   #hoja .membrete .logo img{width:34mm}
   #hoja .membrete .titulo{width:44%;text-align:center;font-weight:700;font-size:13pt}
-  #hoja .membrete .datos{width:24%;font-size:9pt;padding:0}
+  #hoja .membrete tr{height:26mm}
+  #hoja .membrete .logo img{width:34mm;max-height:20mm;object-fit:contain;
+    display:block;margin:0 auto}
+  #hoja .membrete .datos{width:24%;font-size:9pt;padding:0;height:26mm}
   #hoja .membrete .datos div{display:flex;align-items:center;
-    padding:0 3mm;height:11mm;box-sizing:border-box}
+    padding:0 3mm;height:13mm;box-sizing:border-box}
   #hoja .membrete .datos div:first-child{border-bottom:1px solid #000}
   #hoja .datos-acta td{border:1px solid #000;padding:1.6mm 2mm;font-size:9.5pt}
   #hoja .datos-acta .etiqueta{width:36mm}
@@ -121,6 +125,7 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
   <div class="envoltorio">
     <h1>Acta de reunión</h1>
     <span class="estado" id="estado"></span>
+    <button id="btn-nueva" class="sutil" style="min-height:36px;padding:6px 12px;font-size:14px;margin-left:auto">Acta nueva</button>
   </div>
 </header>
 
@@ -134,8 +139,12 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
     <h2>Datos del acta</h2>
     <div class="dos">
       <div class="campo">
-        <label for="obra">Obra</label>
-        <input type="text" id="obra" data-guardar placeholder="25010 Cometa III">
+        <label for="obra-lista">Obra</label>
+        <select id="obra-lista" style="width:100%;font:inherit;min-height:52px;
+          padding:14px 12px;background:var(--gris-1);border:1px solid var(--gris-2);
+          border-radius:var(--radio)"></select>
+        <input type="text" id="obra" data-guardar hidden style="margin-top:10px"
+          placeholder="Código y descripción de la obra">
       </div>
       <div class="campo">
         <label for="fecha">Fecha de la reunión</label>
@@ -941,6 +950,14 @@ function construirActa(plantilla, datos){
 
   function valor(id){ return document.getElementById(id).value.trim(); }
 
+  function ponerFechaDeHoy(){
+    var hoy = new Date();
+    document.getElementById('fecha').value = hoy.getFullYear() + '-' +
+      String(hoy.getMonth() + 1).padStart(2, '0') + '-' +
+      String(hoy.getDate()).padStart(2, '0');
+    guardar();
+  }
+
   function reunirDatos(){
     return Promise.all(listaAsistentes.map(function(a){
       if(a.lienzo.vacio()) return Promise.resolve({nombre: a.nombre.value,
@@ -1101,6 +1118,78 @@ function construirActa(plantilla, datos){
     }
   });
 
+  /* ---------- obras en ejecución ---------- */
+  var OBRAS_RESPALDO = [{"codigo": "25001 - Alejandro San Antonio", "municipio": "Requena"}, {"codigo": "25006 - Nicolai Eliana", "municipio": "La Eliana"}, {"codigo": "25009 - Carlos Pérez", "municipio": "Requena"}, {"codigo": "25010 - Cometa III", "municipio": "Calpe"}];
+  var municipios = {};
+  var selectorObra = document.getElementById('obra-lista');
+  var campoObra = document.getElementById('obra');
+
+  function pintarObras(lista){
+    municipios = {};
+    selectorObra.innerHTML = '<option value="">— Elige la obra —</option>';
+    lista.forEach(function(o){
+      municipios[o.codigo] = o.municipio || '';
+      var op = document.createElement('option');
+      op.value = o.codigo;
+      op.textContent = o.codigo;
+      selectorObra.appendChild(op);
+    });
+    var otra = document.createElement('option');
+    otra.value = '__otra__';
+    otra.textContent = 'Otra obra (escribirla)';
+    selectorObra.appendChild(otra);
+
+    sincronizarSelectorObra();
+  }
+
+  /* Si el borrador traía una obra que no está en la lista, se escribe a mano */
+  function sincronizarSelectorObra(){
+    if(campoObra.value && !(campoObra.value in municipios)){
+      selectorObra.value = '__otra__';
+      campoObra.hidden = false;
+    } else if(campoObra.value){
+      selectorObra.value = campoObra.value;
+      campoObra.hidden = true;
+    }
+  }
+
+  selectorObra.addEventListener('change', function(){
+    if(selectorObra.value === '__otra__'){
+      campoObra.hidden = false;
+      campoObra.value = '';
+      campoObra.focus();
+    } else {
+      campoObra.hidden = true;
+      campoObra.value = selectorObra.value;
+      var lugar = document.getElementById('lugar');
+      if(!lugar.value.trim() && municipios[selectorObra.value]){
+        lugar.value = municipios[selectorObra.value];
+      }
+    }
+    guardar();
+  });
+
+  pintarObras(OBRAS_RESPALDO);
+  fetch('obras.json').then(function(r){ return r.json(); }).then(function(d){
+    if(d && d.obras && d.obras.length) pintarObras(d.obras);
+  }).catch(function(){ /* sin conexión: se queda la lista embebida */ });
+
+  /* ---------- acta nueva ---------- */
+  document.getElementById('btn-nueva').addEventListener('click', function(){
+    if(!confirm('¿Vaciar el acta y empezar una nueva? Se pierde lo que no hayas descargado.')) return;
+    campos.forEach(function(c){ c.value = ''; });
+    listaAsistentes.slice().forEach(function(a){ a.ficha.remove(); });
+    listaAsistentes.length = 0;
+    listaImagenes.slice().forEach(function(i){ i.ficha.remove(); });
+    listaImagenes.length = 0;
+    try{ localStorage.removeItem(CLAVE); }catch(e){}
+    selectorObra.value = '';
+    campoObra.hidden = true;
+    anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
+    ponerFechaDeHoy();
+    decir('Acta nueva');
+  });
+
   /* ---------- entorno ---------- */
   if(location.protocol === 'file:'){
     document.getElementById('aviso-local').hidden = false;
@@ -1115,15 +1204,11 @@ function construirActa(plantilla, datos){
       if(guardado.campos && guardado.campos[c.id] != null) c.value = guardado.campos[c.id];
     });
     (guardado.asistentes || []).forEach(function(a){ anadirAsistente(a.nombre, a.empresa); });
+    sincronizarSelectorObra();
     decir('Borrador recuperado');
   }
   if(!listaAsistentes.length) anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
-  if(!valor('fecha')){
-    var hoy = new Date();
-    document.getElementById('fecha').value = hoy.getFullYear() + '-' +
-      String(hoy.getMonth() + 1).padStart(2, '0') + '-' +
-      String(hoy.getDate()).padStart(2, '0');
-  }
+  if(!valor('fecha')) ponerFechaDeHoy();
 })();
 </script>
 </body>
