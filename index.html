@@ -203,10 +203,26 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
 <nav class="acciones">
   <div class="envoltorio">
     <button id="btn-pdf">Ver como PDF</button>
-    <button id="btn-notion" class="sutil">Copiar para Notion</button>
+    <button id="btn-notion" class="sutil">Resumen</button>
     <button id="btn-docx" class="principal">Descargar .docx</button>
   </div>
 </nav>
+
+<div class="envoltorio" id="panel-notion" hidden
+     style="position:fixed;inset:0;z-index:40;background:var(--papel);
+            overflow:auto;padding-top:calc(env(safe-area-inset-top) + 20px);max-width:none">
+  <div style="max-width:840px;margin:0 auto">
+    <h2 style="font-size:21px;font-weight:700;margin:0 0 4px">Resumen del acta</h2>
+    <p class="pauta">Cópialo y pégalo donde lo necesites.</p>
+    <textarea id="texto-notion" readonly
+      style="min-height:46vh;font-size:15px;line-height:1.55"></textarea>
+    <div class="herramientas" style="margin-top:14px">
+      <button id="btn-copiar">Copiar</button>
+      <button id="btn-compartir" hidden>Compartir</button>
+      <button id="btn-cerrar-notion" class="sutil">Cerrar</button>
+    </div>
+  </div>
+</div>
 
 <div id="hoja"></div>
 
@@ -1085,8 +1101,12 @@ function construirActa(plantilla, datos){
   });
 
   /* ---------- resumen para Notion ---------- */
-  document.getElementById('btn-notion').addEventListener('click', function(){
-    var lineas = [
+  function textoResumen(){
+    function puntos(id){
+      var l = lineasDe(id).map(function(x){ return '- ' + x; });
+      return l.length ? l.join('\n') : '- No hay comentarios al respecto.';
+    }
+    return [
       'ACTA DE REUNIÓN',
       'Obra: ' + valor('obra'),
       'Fecha: ' + fechaEspanola(valor('fecha')),
@@ -1097,25 +1117,51 @@ function construirActa(plantilla, datos){
         return a.nombre.value + (a.empresa.value ? ' (' + a.empresa.value + ')' : '');
       }).filter(function(t){ return t.trim(); }).join('; '),
       '',
-      'VISITA DE OBRA',
-      lineasDe('visita').map(function(l){ return '- ' + l; }).join('\n') || '- No hay comentarios al respecto.',
+      'VISITA DE OBRA', puntos('visita'),
       '',
-      'SEGURIDAD Y SALUD',
-      lineasDe('seguridad').map(function(l){ return '- ' + l; }).join('\n') || '- No hay comentarios al respecto.',
+      'SEGURIDAD Y SALUD', puntos('seguridad'),
       '',
-      'GESTIÓN DE RESIDUOS',
-      lineasDe('residuos').map(function(l){ return '- ' + l; }).join('\n') || '- No hay comentarios al respecto.',
+      'GESTIÓN DE RESIDUOS', puntos('residuos'),
       '',
       'Imágenes: ' + listaImagenes.length
     ].join('\n');
+  }
 
+  var panelNotion = document.getElementById('panel-notion');
+  var areaNotion = document.getElementById('texto-notion');
+  var botonCompartir = document.getElementById('btn-compartir');
+
+  document.getElementById('btn-notion').addEventListener('click', function(){
+    areaNotion.value = textoResumen();
+    panelNotion.hidden = false;
+    botonCompartir.hidden = !navigator.share;
+  });
+
+  document.getElementById('btn-cerrar-notion').addEventListener('click', function(){
+    panelNotion.hidden = true;
+  });
+
+  document.getElementById('btn-copiar').addEventListener('click', function(){
+    areaNotion.focus();
+    areaNotion.setSelectionRange(0, areaNotion.value.length);
+    var copiado = false;
+    try{ copiado = document.execCommand('copy'); }catch(e){}
+    if(copiado){ decir('Resumen copiado'); return; }
     if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(lineas).then(function(){
+      navigator.clipboard.writeText(areaNotion.value).then(function(){
         decir('Resumen copiado');
-      }, function(){ decir('No se pudo copiar'); });
+      }, function(){
+        decir('Selecciónalo y copia a mano');
+      });
     } else {
-      decir('El portapapeles no está disponible aquí');
+      decir('Selecciónalo y copia a mano');
     }
+  });
+
+  document.getElementById('btn-compartir').addEventListener('click', function(){
+    if(!navigator.share) return;
+    navigator.share({title: 'Acta de reunión', text: areaNotion.value})
+      .catch(function(){ /* cancelado por el usuario */ });
   });
 
   /* ---------- obras en ejecución ---------- */
