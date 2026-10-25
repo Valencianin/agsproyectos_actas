@@ -2,7 +2,7 @@
    window.print() no funciona en una app añadida a la pantalla de inicio
    en iPadOS, y en Safari añade la dirección y la fecha al pie. */
 
-function generarPdfActa(datos, logoB64){
+function generarPdfActa(datos, logo){
   var doc = new jspdf.jsPDF({unit: 'mm', format: 'a4'});
 
   var IZQ = 12, DER = 198, ANCHO = DER - IZQ;
@@ -31,9 +31,11 @@ function generarPdfActa(datos, logoB64){
     doc.rect(xDatos, TOPE, anchoDatos, MEMBRETE / 2);
     doc.rect(xDatos, TOPE + MEMBRETE / 2, anchoDatos, MEMBRETE / 2);
 
-    if(logoB64){
-      var anchoImagen = 34, altoImagen = 13;
-      doc.addImage('data:image/jpeg;base64,' + logoB64, 'JPEG',
+    if(logo && logo.b64){
+      /* se encaja dentro de la celda sin deformarlo */
+      var escala = Math.min(36 / logo.ancho, 16 / logo.alto);
+      var anchoImagen = logo.ancho * escala, altoImagen = logo.alto * escala;
+      doc.addImage('data:image/jpeg;base64,' + logo.b64, 'JPEG',
         IZQ + (anchoLogo - anchoImagen) / 2, TOPE + (MEMBRETE - altoImagen) / 2,
         anchoImagen, altoImagen);
     }
