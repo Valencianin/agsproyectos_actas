@@ -1,6 +1,6 @@
 /* Guarda la aplicación en el iPad para poder usarla en obra sin cobertura. */
-var VERSION = 'actas-ags-v4';
-var ARCHIVOS = ['./', './index.html', './manifest.webmanifest', './obras.json', './icono-192.png', './icono-512.png'];
+var VERSION = 'actas-ags-v5';
+var ARCHIVOS = ['./', './index.html', './manifest.webmanifest', './obras.json', './jspdf.umd.min.js', './pdf.js', './icono-192.png', './icono-512.png'];
 
 self.addEventListener('install', function(evento){
   evento.waitUntil(

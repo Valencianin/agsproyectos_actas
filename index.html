@@ -125,7 +125,8 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
   <div class="envoltorio">
     <h1>Acta de reunión</h1>
     <span class="estado" id="estado"></span>
-    <button id="btn-nueva" class="sutil" style="min-height:36px;padding:6px 12px;font-size:14px;margin-left:auto">Acta nueva</button>
+    <button id="btn-guardadas" class="sutil" style="min-height:36px;padding:6px 12px;font-size:14px">Guardadas</button>
+    <button id="btn-nueva" class="sutil" style="min-height:36px;padding:6px 12px;font-size:14px">Acta nueva</button>
   </div>
 </header>
 
@@ -220,6 +221,19 @@ nav.acciones button.principal{background:var(--tinta);color:var(--papel)}
       <button id="btn-copiar">Copiar</button>
       <button id="btn-compartir" hidden>Compartir</button>
       <button id="btn-cerrar-notion" class="sutil">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="envoltorio" id="panel-guardadas" hidden
+     style="position:fixed;inset:0;z-index:40;background:var(--papel);
+            overflow:auto;padding-top:calc(env(safe-area-inset-top) + 20px);max-width:none">
+  <div style="max-width:840px;margin:0 auto">
+    <h2 style="font-size:21px;font-weight:700;margin:0 0 4px">Actas guardadas</h2>
+    <p class="pauta">Se guardan solas en este iPad, con firmas e imágenes.</p>
+    <div id="lista-guardadas"></div>
+    <div class="herramientas" style="margin-top:14px">
+      <button id="btn-cerrar-guardadas" class="sutil">Cerrar</button>
     </div>
   </div>
 </div>
@@ -671,6 +685,9 @@ function construirActa(plantilla, datos){
 
 </script>
 
+<script src="jspdf.umd.min.js"></script>
+<script src="pdf.js"></script>
+
 <script>
 (function(){
   'use strict';
@@ -762,7 +779,7 @@ function construirActa(plantilla, datos){
       configurar: function(c){ for(var k in c) conf[k] = c[k]; },
       deshacer: function(){ trazos.pop(); repintar(); if(opciones.alCambiar) opciones.alCambiar(); },
       limpiar: function(){ trazos = []; repintar(); if(opciones.alCambiar) opciones.alCambiar(); },
-      vacio: function(){ return trazos.length === 0; },
+      vacio: function(){ return trazos.length === 0 && !fondo; },
       ponerFondo: function(img){ fondo = img; trazos = []; },
       canvas: canvas
     };
@@ -815,7 +832,7 @@ function construirActa(plantilla, datos){
   var listaAsistentes = [];
   var contenedorAsistentes = document.getElementById('asistentes');
 
-  function anadirAsistente(nombre, empresa){
+  function anadirAsistente(nombre, empresa, firmaGuardada){
     var ficha = document.createElement('div');
     ficha.className = 'ficha';
     ficha.innerHTML =
@@ -831,6 +848,11 @@ function construirActa(plantilla, datos){
 
     var lienzo = crearLienzo(ficha.querySelector('canvas'), {grosor: 1.8, alCambiar: guardar});
     lienzo.ajustar();
+    if(firmaGuardada){
+      var imgFirma = new Image();
+      imgFirma.onload = function(){ lienzo.ponerFondo(imgFirma); lienzo.ajustar(); };
+      imgFirma.src = firmaGuardada;
+    }
 
     var registro = {
       ficha: ficha, lienzo: lienzo,
@@ -861,7 +883,7 @@ function construirActa(plantilla, datos){
   var listaImagenes = [];
   var contenedorImagenes = document.getElementById('imagenes');
 
-  function anadirImagen(img){
+  function anadirImagen(img, pieGuardado, forzarCroquis){
     var ficha = document.createElement('div');
     ficha.className = 'ficha';
     ficha.innerHTML =
@@ -879,17 +901,18 @@ function construirActa(plantilla, datos){
     contenedorImagenes.appendChild(ficha);
 
     var canvas = ficha.querySelector('canvas');
+    var esCroquis = forzarCroquis != null ? forzarCroquis : !img;
     var proporcion = img ? img.height / img.width : 0.62;
     canvas.style.height = Math.round(
       (ficha.querySelector('.lienzo').getBoundingClientRect().width || 600) * proporcion) + 'px';
 
-    var lienzo = crearLienzo(canvas, {grosor: 3.4, tinta: img ? '#c2261c' : '#000000',
+    var lienzo = crearLienzo(canvas, {grosor: 3.4, tinta: esCroquis ? '#000000' : '#c2261c',
       alCambiar: guardar});
     if(img) lienzo.ponerFondo(img);
     lienzo.ajustar();
 
     var botonesColor = Array.prototype.slice.call(ficha.querySelectorAll('[data-color]'));
-    if(!img){
+    if(esCroquis){
       botonesColor[0].setAttribute('aria-pressed', 'false');
       botonesColor[1].setAttribute('aria-pressed', 'true');
     }
@@ -902,7 +925,9 @@ function construirActa(plantilla, datos){
       });
     });
 
-    var registro = {ficha: ficha, lienzo: lienzo, pie: ficha.querySelector('.pie'), esCroquis: !img};
+    var registro = {ficha: ficha, lienzo: lienzo, pie: ficha.querySelector('.pie'),
+      esCroquis: esCroquis};
+    if(pieGuardado) registro.pie.value = pieGuardado;
     registro.pie.addEventListener('input', guardar);
 
     ficha.querySelector('.deshacer').addEventListener('click', lienzo.deshacer);
@@ -932,30 +957,161 @@ function construirActa(plantilla, datos){
     anadirImagen(null);
   });
 
-  /* ---------- guardado local del texto ---------- */
-  var CLAVE = 'acta-ags-borrador';
+  /* ---------- archivo de actas en el iPad ---------- */
+  var CLAVE = 'acta-ags-ultima';
   var campos = Array.prototype.slice.call(document.querySelectorAll('[data-guardar]'));
+  var actaActual = null;
+  var relojGuardado = null;
+  var baseDatos = null;
 
-  function guardar(){
-    try{
-      var datos = {campos: {}, asistentes: []};
-      campos.forEach(function(c){ datos.campos[c.id] = c.value; });
-      listaAsistentes.forEach(function(a){
-        datos.asistentes.push({nombre: a.nombre.value, empresa: a.empresa.value});
+  function abrirBaseDatos(){
+    return new Promise(function(resolver, rechazar){
+      if(baseDatos) return resolver(baseDatos);
+      if(!window.indexedDB) return rechazar(new Error('sin almacenamiento'));
+      var peticion = indexedDB.open('actas-ags', 1);
+      peticion.onupgradeneeded = function(e){
+        var bd = e.target.result;
+        if(!bd.objectStoreNames.contains('actas')) bd.createObjectStore('actas', {keyPath: 'id'});
+      };
+      peticion.onsuccess = function(){ baseDatos = peticion.result; resolver(baseDatos); };
+      peticion.onerror = function(){ rechazar(peticion.error); };
+    });
+  }
+
+  function transaccion(modo){
+    return abrirBaseDatos().then(function(bd){
+      return bd.transaction('actas', modo).objectStore('actas');
+    });
+  }
+
+  function envolver(peticion){
+    return new Promise(function(resolver, rechazar){
+      peticion.onsuccess = function(){ resolver(peticion.result); };
+      peticion.onerror = function(){ rechazar(peticion.error); };
+    });
+  }
+
+  function instantanea(){
+    var datos = {id: actaActual, actualizado: Date.now(), campos: {}, asistentes: [], imagenes: []};
+    campos.forEach(function(c){ datos.campos[c.id] = c.value; });
+    listaAsistentes.forEach(function(a){
+      datos.asistentes.push({
+        nombre: a.nombre.value,
+        empresa: a.empresa.value,
+        firma: a.lienzo.vacio() ? null : a.lienzo.canvas.toDataURL('image/png')
       });
-      localStorage.setItem(CLAVE, JSON.stringify(datos));
-    }catch(e){ /* sin almacenamiento disponible: se sigue trabajando en memoria */ }
+    });
+    listaImagenes.forEach(function(i){
+      datos.imagenes.push({
+        url: i.lienzo.canvas.toDataURL('image/png'),
+        pie: i.pie.value,
+        esCroquis: i.esCroquis
+      });
+    });
+    return datos;
   }
 
-  function recuperar(){
-    try{
-      var crudo = localStorage.getItem(CLAVE);
-      if(!crudo) return null;
-      return JSON.parse(crudo);
-    }catch(e){ return null; }
+  /* Se llama en cada cambio; escribe pasado un momento para no ir al disco en cada trazo */
+  function guardar(){
+    if(relojGuardado) clearTimeout(relojGuardado);
+    relojGuardado = setTimeout(function(){
+      if(!actaActual) actaActual = 'acta-' + Date.now();
+      var datos = instantanea();
+      datos.id = actaActual;
+      transaccion('readwrite').then(function(almacen){
+        return envolver(almacen.put(datos));
+      }).then(function(){
+        try{ localStorage.setItem(CLAVE, actaActual); }catch(e){}
+      }).catch(function(){ decir('No se pudo guardar en el iPad'); });
+    }, 900);
   }
 
-  campos.forEach(function(c){ c.addEventListener('input', guardar); });
+  function listarActas(){
+    return transaccion('readonly').then(function(almacen){
+      return envolver(almacen.getAll());
+    }).then(function(todas){
+      return todas.sort(function(a, b){ return b.actualizado - a.actualizado; });
+    });
+  }
+
+  function volcarEnFormulario(datos){
+    campos.forEach(function(c){
+      c.value = (datos.campos && datos.campos[c.id] != null) ? datos.campos[c.id] : '';
+    });
+    listaAsistentes.slice().forEach(function(a){ a.ficha.remove(); });
+    listaAsistentes.length = 0;
+    listaImagenes.slice().forEach(function(i){ i.ficha.remove(); });
+    listaImagenes.length = 0;
+
+    (datos.asistentes || []).forEach(function(a){
+      anadirAsistente(a.nombre, a.empresa, a.firma);
+    });
+    if(!listaAsistentes.length) anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
+
+    (datos.imagenes || []).forEach(function(i){
+      var img = new Image();
+      img.onload = function(){ anadirImagen(img, i.pie, i.esCroquis); };
+      img.src = i.url;
+    });
+
+    actaActual = datos.id;
+    sincronizarSelectorObra();
+  }
+
+  /* ---------- panel de actas guardadas ---------- */
+  var panelGuardadas = document.getElementById('panel-guardadas');
+  var listaGuardadas = document.getElementById('lista-guardadas');
+
+  function pintarGuardadas(){
+    return listarActas().then(function(todas){
+      if(!todas.length){
+        listaGuardadas.innerHTML = '<p class="aviso">Todavía no hay ninguna guardada.</p>';
+        return;
+      }
+      listaGuardadas.innerHTML = '';
+      todas.forEach(function(a){
+        var fila = document.createElement('div');
+        fila.className = 'ficha';
+        var titulo = (a.campos && a.campos.obra) || 'Sin obra';
+        var fecha = fechaEspanola(a.campos && a.campos.fecha) || '';
+        var motivo = (a.campos && a.campos.motivo) || '';
+        fila.innerHTML =
+          '<div style="font-weight:700">' + titulo + '</div>' +
+          '<div style="color:var(--gris-3);font-size:14px;margin:2px 0 12px">' +
+          [fecha, motivo].filter(Boolean).join(' · ') +
+          (a.id === actaActual ? ' · en edición' : '') + '</div>' +
+          '<div style="display:flex;gap:8px">' +
+          '<button type="button" class="abrir">Abrir</button>' +
+          '<button type="button" class="sutil borrar">Borrar</button></div>';
+        fila.querySelector('.abrir').addEventListener('click', function(){
+          volcarEnFormulario(a);
+          try{ localStorage.setItem(CLAVE, a.id); }catch(e){}
+          panelGuardadas.hidden = true;
+          decir('Acta abierta');
+        });
+        fila.querySelector('.borrar').addEventListener('click', function(){
+          if(!confirm('¿Borrar esta acta del iPad?')) return;
+          transaccion('readwrite').then(function(almacen){
+            return envolver(almacen.delete(a.id));
+          }).then(function(){
+            if(a.id === actaActual) actaActual = null;
+            pintarGuardadas();
+          });
+        });
+        listaGuardadas.appendChild(fila);
+      });
+    }).catch(function(){
+      listaGuardadas.innerHTML = '<p class="aviso alerta">No se pudo leer el archivo.</p>';
+    });
+  }
+
+  document.getElementById('btn-guardadas').addEventListener('click', function(){
+    panelGuardadas.hidden = false;
+    pintarGuardadas();
+  });
+  document.getElementById('btn-cerrar-guardadas').addEventListener('click', function(){
+    panelGuardadas.hidden = true;
+  });
 
   /* ---------- recogida de datos ---------- */
   function lineasDe(id){
@@ -1021,83 +1177,37 @@ function construirActa(plantilla, datos){
       datos.pie = bytesDeB64(PIE_B64);
       datos.tiposContenido = bytesDeB64(TIPOS_B64);
       var bytes = construirActa(bytesDeB64(PLANTILLA_B64), datos);
-      var blob = new Blob([bytes], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
-      var enlace = document.createElement('a');
-      enlace.href = URL.createObjectURL(blob);
-      enlace.download = nombreArchivo(datos);
-      document.body.appendChild(enlace);
-      enlace.click();
-      setTimeout(function(){
-        URL.revokeObjectURL(enlace.href);
-        enlace.remove();
-      }, 2000);
+      descargar(new Blob([bytes], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}),
+        nombreArchivo(datos));
       decir('Acta descargada');
     }).catch(function(error){
       decir('No se pudo generar: ' + error.message);
     }).then(function(){ boton.disabled = false; });
   });
 
-  /* ---------- PDF por impresión ---------- */
-  function escapar(t){
-    return String(t || '').replace(/[&<>]/g, function(c){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];
-    });
-  }
-
-  function bloqueSeccion(titulo, lineas){
-    var puntos = lineas.length ? lineas : ['No hay comentarios al respecto.'];
-    return '<h3>' + titulo + '</h3><ul>' +
-      puntos.map(function(l){ return '<li>' + escapar(l) + '</li>'; }).join('') + '</ul>';
+  /* ---------- PDF ---------- */
+  function descargar(blob, nombre){
+    var enlace = document.createElement('a');
+    enlace.href = URL.createObjectURL(blob);
+    enlace.download = nombre;
+    document.body.appendChild(enlace);
+    enlace.click();
+    setTimeout(function(){ URL.revokeObjectURL(enlace.href); enlace.remove(); }, 2000);
   }
 
   document.getElementById('btn-pdf').addEventListener('click', function(){
+    var boton = this;
+    boton.disabled = true;
+    decir('Montando el PDF…');
     reunirDatos().then(function(datos){
-      var filas = [
-        ['Obra:', datos.obra],
-        ['Promotor de la reunión:', datos.promotor],
-        ['Motivo de la reunión:', datos.motivo],
-        ['Lugar de la reunión:', datos.lugar]
-      ].map(function(f){
-        return '<tr><td class="etiqueta">' + f[0] + '</td><td colspan="2">' +
-          escapar(f[1]) + '</td></tr>';
-      }).join('');
-
-      var asistentes = datos.asistentes.map(function(a){
-        return '<tr><td>' + escapar(a.nombre) + '</td><td>' + escapar(a.empresa) +
-          '</td><td class="firma-celda">' +
-          (a.firma ? '<img src="' + a.firma.url + '">' : '') + '</td></tr>';
-      }).join('');
-
-      var fotos = datos.fotos.map(function(f){
-        return '<figure><img src="' + f.url + '">' +
-          (f.pie ? '<figcaption>' + escapar(f.pie) + '</figcaption>' : '') + '</figure>';
-      }).join('');
-
-      document.getElementById('hoja').innerHTML =
-        '<table class="membrete"><tr>' +
-          '<td class="logo"><img src="data:image/jpeg;base64,' + LOGO_B64 + '" alt="AGS"></td>' +
-          '<td class="titulo">ACTA DE REUNIÓN</td>' +
-          '<td class="datos"><div>Fecha: ' + fechaEspanola(datos.fecha) + '</div><div>Hoja nº</div></td>' +
-        '</tr></table>' +
-        '<table class="datos-acta">' + filas +
-          '<tr class="banda"><td colspan="3">Relación de personas que intervienen en la reunión</td></tr>' +
-          '<tr class="cabecera-tabla"><td>NOMBRE</td><td>EMPRESA</td><td>FIRMA</td></tr>' +
-          asistentes +
-        '</table>' +
-        '<p style="margin:4mm 0 0">Asuntos tratados en la reunión,</p>' +
-        bloqueSeccion('VISITA DE OBRA', datos.secciones.visita) +
-        bloqueSeccion('SEGURIDAD Y SALUD', datos.secciones.seguridad) +
-        bloqueSeccion('GESTIÓN DE RESIDUOS', datos.secciones.residuos) +
-        '<h3>FOTOS DE LA VISITA</h3>' +
-        (fotos || '<ul><li>No hay comentarios al respecto.</li></ul>') +
-        '<div class="clausula">FECHA DE ENVÍO: ' + fechaEspanola(datos.fecha) + '<br>' +
-        'Tras el envío de esta acta, si en el plazo de una semana no se recibe notificación alguna ' +
-        'por parte de las partes que han intervenido en la reunión, se da por aprobado su contenido ' +
-        'aunque no se firme.</div>';
-
-      setTimeout(function(){ window.print(); }, 150);
-    });
+      var doc = generarPdfActa(datos, LOGO_B64);
+      descargar(new Blob([doc.output('arraybuffer')], {type: 'application/pdf'}),
+        nombreArchivo(datos).replace(/\.docx$/, '.pdf'));
+      decir('PDF descargado');
+    }).catch(function(error){
+      decir('No se pudo generar: ' + error.message);
+    }).then(function(){ boton.disabled = false; });
   });
 
   /* ---------- resumen para Notion ---------- */
@@ -1165,7 +1275,7 @@ function construirActa(plantilla, datos){
   });
 
   /* ---------- obras en ejecución ---------- */
-  var OBRAS_RESPALDO = [{"codigo": "25001 - Alejandro San Antonio", "municipio": "Requena"}, {"codigo": "25006 - Nicolai Eliana", "municipio": "La Eliana"}, {"codigo": "25009 - Carlos Pérez", "municipio": "Requena"}, {"codigo": "25010 - Cometa III", "municipio": "Calpe"}];
+  var OBRAS_RESPALDO = [{"codigo": "25001 - Alejandro San Antonio", "municipio": "Requena"}, {"codigo": "25006 - Nicolai Eliana", "municipio": "La Eliana"}, {"codigo": "25009 - Carlos Pérez", "municipio": "Requena"}, {"codigo": "25010 - Cometa III", "municipio": "Calpe"}, {"codigo": "26010 - Enginent IV", "municipio": "Calpe"}];
   var municipios = {};
   var selectorObra = document.getElementById('obra-lista');
   var campoObra = document.getElementById('obra');
@@ -1222,18 +1332,13 @@ function construirActa(plantilla, datos){
 
   /* ---------- acta nueva ---------- */
   document.getElementById('btn-nueva').addEventListener('click', function(){
-    if(!confirm('¿Vaciar el acta y empezar una nueva? Se pierde lo que no hayas descargado.')) return;
-    campos.forEach(function(c){ c.value = ''; });
-    listaAsistentes.slice().forEach(function(a){ a.ficha.remove(); });
-    listaAsistentes.length = 0;
-    listaImagenes.slice().forEach(function(i){ i.ficha.remove(); });
-    listaImagenes.length = 0;
-    try{ localStorage.removeItem(CLAVE); }catch(e){}
+    if(!confirm('¿Empezar un acta nueva? La actual se queda guardada en el iPad.')) return;
+    actaActual = 'acta-' + Date.now();
+    volcarEnFormulario({id: actaActual, campos: {}, asistentes: [], imagenes: []});
     selectorObra.value = '';
     campoObra.hidden = true;
-    anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
     ponerFechaDeHoy();
-    decir('Acta nueva');
+    decir('Acta nueva — la anterior queda en Guardadas');
   });
 
   /* ---------- entorno ---------- */
@@ -1244,17 +1349,31 @@ function construirActa(plantilla, datos){
   }
 
   /* ---------- arranque ---------- */
-  var guardado = recuperar();
-  if(guardado){
-    campos.forEach(function(c){
-      if(guardado.campos && guardado.campos[c.id] != null) c.value = guardado.campos[c.id];
+  function arrancar(){
+    var ultima = null;
+    try{ ultima = localStorage.getItem(CLAVE); }catch(e){}
+    if(!ultima){
+      anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
+      ponerFechaDeHoy();
+      return;
+    }
+    transaccion('readonly').then(function(almacen){
+      return envolver(almacen.get(ultima));
+    }).then(function(datos){
+      if(datos){
+        volcarEnFormulario(datos);
+        decir('Última acta recuperada');
+      } else {
+        anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
+        ponerFechaDeHoy();
+      }
+    }).catch(function(){
+      anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
+      ponerFechaDeHoy();
     });
-    (guardado.asistentes || []).forEach(function(a){ anadirAsistente(a.nombre, a.empresa); });
-    sincronizarSelectorObra();
-    decir('Borrador recuperado');
   }
-  if(!listaAsistentes.length) anadirAsistente('ALEJANDRO GARIJO SÁNCHEZ', 'AGS Proyectos');
-  if(!valor('fecha')) ponerFechaDeHoy();
+
+  arrancar();
 })();
 </script>
 </body>
